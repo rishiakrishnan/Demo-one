@@ -1,0 +1,6 @@
+uart	4
+spi	1
+twi	2
+sd	2
+jtag	2
+pwm	1

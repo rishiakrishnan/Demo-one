@@ -1,0 +1,233 @@
+# Input for DebugSoc.bsv:
+# Provide yes/no:
+rtldump: "yes"
+bscan2e: "yes"
+
+#################################################################################################################################
+## module mkplic #(parameter paddrWidth = paddr,     // Dynamic address width                                                 ##
+##                parameter dataWidth = 32,         // Dynamic data width                                                      ##
+##                parameter configParam = 0,        // Dynamic configuration parameter                                         ##
+##                parameter irqWidth = 31,          // Dynamic IRQ width                                                       ##
+##                parameter targetWidth = 2,        // Dynamic target width                                                    ##
+##                parameter priorityWidth = 7)      // Dynamic priority width #                                                ##
+##               (Ifc_plic_axi4lite#(paddrWidth, dataWidth, configParam, irqWidth, targetWidth, priorityWidth));               ##
+#################################################################################################################################
+
+################################################################
+#        This CONDITIONS MUST FOLLOW:                          #
+#           AXI4_LITE--->ADD === AXI4_LITE--->ADD              #
+#           AXI4--->DATA === XLEN--->DATA                      #
+################################################################
+
+# START OF COMMON PARAMETERS:
+
+# AXI4_LITE:
+axi4_lite_data: 32
+axi4_lite_addr: 32
+
+# AXI4:
+axi4_data: 32
+axi4_addr: 32
+
+# PHYSICAL ADDRESS:
+paddr: 32
+daddr: 32
+config: 0
+# END OF COMMON PARAMETERS
+
+# SPECIFIC MODULES CHANGES:
+
+# Mixed cluster:
+  # module mkgpio(Ifc_gpio_axi4lite#(`paddr, 32, 0, 32));
+mkgpio_data_addr: 32
+mkgpio_conf_para: 0
+mkgpio_third: 0
+
+# module mkplic(Ifc_plic_axi4lite#(paddr, 32, 0, 31, 2, 7));
+mkplic_data_addr: 32
+mkplic_conf_para: 0
+mkplic_third: 31
+mkplic_four: 2
+mkplic_fiv: 7
+
+
+
+# Pwm_cluster:
+# module mkpwm(Ifc_pwm_axi4lite#(paddr, 32, 0, 32, 6));
+mkpwm_data_para: 32
+mkpwm_conf_para: 0
+mkpwm_four: 32
+mkwm_five: 6
+
+# TbSoc:
+#Ifc_bram_axi4lite#(paddr, 32, 0, 15) xbram <- mkbram_axi4lite(h4_1000, "boot1.mem", "BRAM")
+Ifc_bram_x_data_para: 32
+Ifc_bram_x_conf_para: 0
+Ifc_bram_x_four: 15
+
+#Ifc_bram_axi4lite#(paddr, 32, 0, 15) eth0 <- mkbram_axi4lite(h4_1000, "boot1.mem", "BRAM")
+Ifc_bram_eth_data_para: 32
+Ifc_bram_eth_conf_para: 0
+Ifc_bram_eth_four: 15
+# END OF SPECIFIC MODULE CHANGES
+
+# Ifc_err_slave_axi4lite:
+# Ifc_err_slave_AddressWidth: 32   # Width of address bus
+# Ifc_err_slave_DataWidth: 32      # Width of data bus
+
+# Sign Dump generation:
+# sign_dump needed(yes/no):
+sign_dump: "yes"
+
+# SOC input:
+# if needed(yes/no):
+debug: "yes"
+simulate: "yes"
+rtldump: "yes"
+
+# SOC input (implementation will be done later):
+gpio_out: [0, 1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13]
+
+combined_gpio:
+  - wr_gpio31_in
+  - wr_gpio30_in
+  - wr_gpio29_in
+  - wr_gpio28_in
+  - wr_gpio27_in
+  - wr_gpio26_in
+  - wr_gpio25_in
+  - wr_gpio24_in
+  - wr_gpio23_in
+  - wr_gpio22_in
+  - wr_gpio21_in
+  - wr_gpio20_in
+  - wr_gpio19_in
+  - wr_gpio18_in
+  - wr_gpio17_in
+  - wr_gpio16_in
+  - wr_gpio15_in
+  - wr_gpio14_in
+  - pinmux_gpio_in[10]
+  - pinmux_gpio_in[9]
+  - pinmux_gpio_in[8]
+  - pinmux_gpio_in[7]
+  - pinmux_gpio_in[6]
+  - wr_gpio8_in
+  - wr_gpio7_in
+  - pinmux_gpio_in[5]
+  - pinmux_gpio_in[4]
+  - wr_gpio4_in
+  - pinmux_gpio_in[3]
+  - pinmux_gpio_in[2]
+  - pinmux_gpio_in[1]
+  - pinmux_gpio_in[0]
+
+# End of SOC
+
+# TbSOC generation:
+# if TbSOC is needed:
+tbsoc: "yes"
+
+# Input for the TbSOC:
+# openocd: "yes"
+Rv64: "yes"
+spfpu: "yes"
+debug: "yes"
+rtldump: "yes"
+uart: "yes"
+cocotb_sim: "yes"
+gpio: [4, 7, 8, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+iocell_io: [7, 8, 9, 10, 12, 13, 16, 17, 18, 19, 20]
+
+# Supervisor: "yes"
+# Hypervisor: "yes"
+# Atomic: "yes"
+# Debug: "yes"
+# End of sign dump
+
+# Common input (start from 0):
+# If one peripheral needed then add 0
+cell_mux: 11
+cell_mux_value: [7, 8, 9, 10, 12, 13, 16, 17, 18, 19, 20]
+i2c: 3
+uart: 100
+spi: 3
+pwm: 3 
+
+# NEED TO ADD PINMUX BY USING BIRBUCKER DOC WHICH CONTAINS THE PINMUX IMPLEMENTATION
+# BUT IT ALSO CONTAINS VERILOG CREATION SO WE NEED TO REMOVE THE UNWANTED FUNCTIONS AND FILES.
+# NEED TO ADD PINMUX BY USING BIRBUCKER DOC WHICH CONTAINS THE PINMUX IMPLEMENTATION
+# BUT IT ALSO CONTAINS VERILOG CREATION SO WE NEED TO REMOVE THE UNWANTED FUNCTIONS AND FILES.
+
+# Additional Files:
+
+# File interface:
+interface: |
+  uart    4
+  spi 1
+  twi 2
+  sd  2
+  jtag    2
+  pwm 1
+
+# File jtag:
+jtag: |
+  tdi     in
+  tms     in
+  tclk    in
+  trst    in
+  tdo     out
+
+# File pinmap:
+pinmap: |
+  muxed
+  0           uart0_tx      spi0_sclk    uart2_tx    uart3_tx
+  1           uart0_rx      spi0_mosi    uart2_rx    uart3_rx
+  2           twi0_sda      spi0_ss   
+  3           twi0_scl      spi0_miso
+  8       sd0_clk       sd1_clk
+  9       sd0_cmd       sd1_cmd
+  10      sd0_d0        sd1_d0
+  11      sd0_d1        sd1_d1
+  12      sd0_d2        sd1_d2
+  13      sd0_d3        sd1_d3    pwm0_pwm
+  dedicated
+  4                 uart1_tx
+  5                 uart1_rx
+  6                 twi1_sda
+  7                 twi1_scl
+  14      jtag0_tclk
+  15      jtag0_tdo
+  16      jtag0_tdi
+  17      jtag0_tms
+  18      jtag0_tdo
+
+# File pwm_file:
+pwm_file: |
+  pwm    out
+
+# File sd:
+sd: |
+  clk    out
+  cmd    out
+  d0     inout
+  d1     inout
+  d2     inout
+  d3     inout
+
+# File spi_file:
+spi_file: |
+  sclk   out
+  mosi   out
+  ss     out
+  miso   in
+
+# File twi:
+twi: |
+  sda    inout
+  scl    inout
+
+# File uart:
+uart_file: |
+  rx     in
+  tx     out

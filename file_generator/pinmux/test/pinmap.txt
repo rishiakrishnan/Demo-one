@@ -1,0 +1,21 @@
+muxed
+0           uart0_tx      spi0_sclk    uart2_tx    uart3_tx
+1           uart0_rx      spi0_mosi    uart2_rx    uart3_rx
+2           twi0_sda      spi0_ss   
+3           twi0_scl      spi0_miso
+8       sd0_clk       sd1_clk
+9       sd0_cmd       sd1_cmd
+10      sd0_d0        sd1_d0
+11      sd0_d1        sd1_d1
+12      sd0_d2        sd1_d2
+13      sd0_d3        sd1_d3    pwm0_pwm
+dedicated
+4                 uart1_tx
+5                 uart1_rx
+6                 twi1_sda
+7                 twi1_scl
+14      jtag0_tclk
+15      jtag0_tdo
+16      jtag0_tdi
+17      jtag0_tms
+18      jtag0_tdo

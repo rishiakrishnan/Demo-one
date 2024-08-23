@@ -1,0 +1,635 @@
+/* 
+Copyright (c) 2018, IIT Madras All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted
+provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this list of conditions
+  and the following disclaimer.  
+* Redistributions in binary form must reproduce the above copyright notice, this list of 
+  conditions and the following disclaimer in the documentation and/or other materials provided 
+ with the distribution.  
+* Neither the name of IIT Madras  nor the names of its contributors may be used to endorse or 
+  promote products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS
+OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT 
+OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+--------------------------------------------------------------------------------------------------
+
+Author: Neel Gala
+Email id: neelgala@gmail.com
+Details:
+
+--------------------------------------------------------------------------------------------------
+*/
+package Soc;
+  // project related imports
+  import Semi_FIFOF:: *;
+  import AXI4_Types:: *;
+  import AXI4_Fabric:: *;
+  import AXI4_Lite_Types:: *;
+  import AXI4_Lite_Fabric:: *;
+  import axi2axil :: * ;
+  import ccore:: * ;
+  import Clocks :: *;
+  import ccore_types::*;
+  import GetPut :: * ;
+  import Connectable :: * ;
+  `include "Soc.defines"
+
+  // peripheral imports
+  import clint::*;
+  import err_slave::*;
+//  import pwm_cluster :: * ;
+  import uart_cluster :: * ;
+  import spi_cluster :: * ;
+  import mixed_cluster :: * ;
+  import uart :: *;
+  import sspi :: *;
+//  import pwm :: *;
+  import i2c :: *;
+  import gpio :: *;
+  import csrbox :: * ;
+  import bram :: *;
+
+  {% if debug == 'yes' %}
+  import debug_types::*;    
+  {% endif %}   
+  import pinmux::*;
+  import pinmux_axi4lite :: * ;                
+
+  import Vector :: *;
+
+
+  {% if simulate=="yes"%}
+  import sign_dump :: *;
+  {% endif%}
+
+  function Bit#(TLog#(`Num_Fast_Slaves)) fn_slave_map_fast (Bit#(`paddr) addr);
+    Bit#(TLog#(`Num_Fast_Slaves)) slave_num = 0;
+    if(addr >= `MemoryBase && addr<= `MemoryEnd)
+      slave_num = `Memory_slave_num;
+    else if(addr >= `ClintBase && addr <= `ClintEnd)
+      slave_num = `Clint_slave_num;
+	  {% if debug == 'yes' %}
+	  else if(addr >= `DebugBase && addr <= `DebugEnd)
+	{% endif %}  
+      slave_num = `Debug_slave_num;
+    else if(addr >= `BootBase && addr <= `BootEnd)
+      slave_num = `Boot_slave_num;
+    else if(addr >= `SlowBase && addr <= `SlowEnd)
+      slave_num = `Slow_fabric_slave_num;
+    else if(addr >= `PLICBase && addr <= `PLICEnd)
+      slave_num = `Slow_fabric_slave_num;
+      {% if simulate == 'yes' %}
+      else if(addr >= `SignBase && addr <= `SignEnd)
+      slave_num = `Sign_slave_num;
+    {% endif %}
+    else
+      slave_num = `FastErr_slave_num;
+      
+    return slave_num;
+  endfunction:fn_slave_map_fast
+  
+  function Bit#(TLog#(`Num_Slaves)) fn_slave_map (Bit#(`paddr) addr);
+    Bit#(TLog#(`Num_Slaves)) slave_num = 0;
+    if(addr >= `PWMClusterBase && addr <= `PWMClusterEnd)
+      slave_num = `PWMCluster_slave_num;
+    else if(addr >= `UARTClusterBase && addr <= `UARTClusterEnd)
+      slave_num = `UARTCluster_slave_num;
+    else if(addr >= `SPIClusterBase && addr <= `SPIClusterEnd)
+      slave_num = `SPICluster_slave_num;
+    else if(addr >= `MixedClusterBase && addr <= `MixedClusterEnd)
+      slave_num = `MixedCluster_slave_num;
+    else if(addr >= `PLICBase && addr <= `PLICEnd)
+      slave_num = `MixedCluster_slave_num;
+    else if (addr >= `EthBase && addr <= `EthEnd)
+      slave_num = `Eth_slave_num;
+    else
+      slave_num = `Err_slave_num;
+      
+    return slave_num;
+  endfunction:fn_slave_map
+
+  interface Ifc_chip_io;
+  {% for i in range(spi) %}
+  interface Ifc_sspi_io spi{{i}}_io;
+{% endfor %}
+    interface RS232 uart0_io;
+	{% for i in range(i2c) %}
+    method I2C_out i2c{{i}}_out;									//I2c IO interface
+        {% endfor %}
+    (*always_ready, always_enabled*)
+    interface AXI4_Lite_Master_IFC#({{paddr}}, {{daddr}}, {{config}}) xadc_master;
+    interface AXI4_Lite_Master_IFC#({{paddr}}, {{daddr}}, {{config}}) eth_master;
+    interface AXI4_Master_IFC#({{paddr}}, ELEN, 0) mem_master;
+    interface IOCellSide iocell_io;
+    (*always_enabled,always_ready*)
+    method Action  gpio_4(Bit#(1) in);
+    (*always_enabled,always_ready*)
+    method Action  gpio_7(Bit#(1) in);
+    (*always_enabled,always_ready*)
+    method Action  gpio_8(Bit#(1) in);
+    (*always_enabled,always_ready*)
+    method Action  gpio_14(Bit#(1) in);
+    (*always_enabled,always_ready*)
+    method Action  gpio_15(Bit#(1) in);
+//    (*always_enabled,always_ready*)
+//    method Action  gpio_16(Bit#(1) in);
+//    (*always_enabled,always_ready*)
+//    method Action  gpio_17(Bit#(1) in);
+//    (*always_enabled,always_ready*)
+//    method Action  gpio_18(Bit#(1) in);
+//    (*always_enabled,always_ready*)
+//    method Action  gpio_19(Bit#(1) in);
+//    (*always_enabled,always_ready*)
+//    method Action  gpio_20(Bit#(1) in);
+//    (*always_enabled,always_ready*)
+//    method Action  gpio_21(Bit#(1) in);
+//    (*always_enabled,always_ready*)
+//    method Action  gpio_22(Bit#(1) in);
+//    (*always_enabled,always_ready*)
+//    method Action  gpio_23(Bit#(1) in);
+//    (*always_enabled,always_ready*)
+//    method Action  gpio_24(Bit#(1) in);
+//    (*always_enabled,always_ready*)
+//    method Action  gpio_25(Bit#(1) in);
+//    (*always_enabled,always_ready*)
+//    method Action  gpio_26(Bit#(1) in);
+//    (*always_enabled,always_ready*)
+//    method Action  gpio_27(Bit#(1) in);
+//    (*always_enabled,always_ready*)
+//    method Action  gpio_28(Bit#(1) in);
+//    (*always_enabled,always_ready*)
+//    method Action  gpio_29(Bit#(1) in);
+//    (*always_enabled,always_ready*)
+//    method Action  gpio_30(Bit#(1) in);
+//    (*always_enabled,always_ready*)
+//    method Action  gpio_31(Bit#(1) in);
+
+    (*always_enabled,always_ready*)
+    method Bit#(1)gpio_4_out;
+    (*always_enabled,always_ready*)
+    method Bit#(1)gpio_7_out;
+    (*always_enabled,always_ready*)
+    method Bit#(1)gpio_8_out;
+    (*always_enabled,always_ready*)
+    method Bit#(1)gpio_14_out;
+    (*always_enabled,always_ready*)
+    method Bit#(1)gpio_15_out;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_16_out;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_17_out;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_18_out;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_19_out;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_20_out;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_21_out;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_22_out;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_23_out;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_24_out;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_25_out;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_26_out;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_27_out;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_28_out;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_29_out;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_30_out;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_31_out;
+
+    (*always_enabled,always_ready*)
+    method Bit#(1)gpio_4_outen;
+    (*always_enabled,always_ready*)
+    method Bit#(1)gpio_7_outen;
+    (*always_enabled,always_ready*)
+    method Bit#(1)gpio_8_outen;
+    (*always_enabled,always_ready*)
+    method Bit#(1)gpio_14_outen;
+    (*always_enabled,always_ready*)
+    method Bit#(1)gpio_15_outen;
+////    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_16_outen;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_17_outen;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_18_outen;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_19_outen;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_20_outen;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_21_outen;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_22_outen;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_23_outen;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_24_outen;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_25_outen;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_26_outen;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_27_outen;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_28_outen;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_29_outen;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_30_outen;
+//    (*always_enabled,always_ready*)
+//    method Bit#(1)gpio_31_outen;
+    (*always_ready, always_enabled*)
+    method Action ext_interrupts(Bit#(2) i);
+  endinterface
+
+  interface Ifc_soc_sb;
+  {% if rtldump == 'yes' %}
+  interface Sbread sbread;
+  method Maybe#(CommitLogPacket) commitlog;
+
+{% endif %}   
+
+{% if debug == 'yes' %}
+interface AXI4_Slave_IFC#({{paddr}}, `elen, USERSPACE) to_debug_master;
+interface AXI4_Master_IFC#({{paddr}}, `elen, USERSPACE) to_debug_slave;
+method Action ma_hart_interrupts (Bit#(`num_harts) i);
+method Bit#(`num_harts) mv_harts_have_reset;
+method Bit#(`num_harts) mv_core_debugenable;
+
+{% endif %}   
+  endinterface
+
+
+  interface Ifc_Soc;
+    interface Ifc_chip_io chip_io;
+    interface Ifc_soc_sb soc_sb;
+  endinterface
+
+ typedef (TAdd#(TSub#(TMul#(`num_harts,2),1),{% if debug == 'yes' %} debug 1 {% else %} 0 {% endif %} )) Debug_master_num;
+  typedef (TAdd#(Debug_master_num, 1)) Num_Fast_Masters;
+
+
+  (*synthesize*)
+  module mkSoc  {% if debug == 'yes' %} debug #(Vector#(`num_harts, Reset) hartresets )  {% endif %}  (Ifc_Soc);
+    let curr_clk<-exposeCurrentClock;
+    let curr_reset<-exposeCurrentReset;
+
+    Reset core_reset [`num_harts];
+    for (Integer i = 0; i<`num_harts; i = i + 1) begin
+		{% if debug == 'yes' %}
+		core_reset[i]<- mkResetEither(hartresets[i],curr_reset);     // OR default and new_rst
+		{% else %}
+		core_reset[i] = curr_reset;
+		{% endif %}
+    end
+
+    Ifc_ccore_axi4 ccore <- mkccore_axi4(`resetpc, 0);
+
+    AXI4_Fabric_IFC #(`Num_Fast_Masters, `Num_Fast_Slaves, {{paddr}}, ELEN, USERSPACE) 
+                                                    fabric <- mkAXI4_Fabric(fn_slave_map_fast);
+    Ifc_clint_axi4#({{paddr}}, ELEN, 0, 1, 256) clint <- mkclint_axi4();
+  //`ifdef debug
+    //Ifc_debug_halt_loop_axi4#({{paddr}}, ELEN, USERSPACE) debug_memory <- mkdebug_halt_loop_axi4;
+  //`endif
+    Ifc_err_slave_axi4#({{paddr}},ELEN,0) fast_err_slave <- mkerr_slave_axi4;
+
+    AXI4_Lite_Fabric_IFC #(`Num_Masters, `Num_Slaves, {{paddr}}, 32, USERSPACE) 
+                                                        slow_fabric <- mkAXI4_Lite_Fabric(fn_slave_map);
+//    Ifc_pwm_cluster pwm_cluster <- mkpwm_cluster;
+    Ifc_uart_cluster uart_cluster <- mkuart_cluster;
+    Ifc_spi_cluster spi_cluster <- mkspi_cluster;
+    Ifc_mixed_cluster mixed_cluster <- mkmixed_cluster;
+    Ifc_err_slave_axi4lite#({{paddr}},32,0) err_slave <- mkerr_slave_axi4lite;
+    Ifc_bram_axi4#({{paddr}}, XLEN, 0,  15) boot <- mkbram_axi4('h1000, "boot.mem","BOOT");
+    {% if simulate == 'yes' %}
+    Ifc_sign_dump signature <- mksign_dump();
+    {% endif %} 
+    Wire#(Bit#(2)) wr_ext_interrupts <- mkWire();
+
+    Wire#(Bit#(1)) wr_gpio4_in <- mkDWire(0);
+    Wire#(Bit#(1)) wr_gpio7_in <- mkDWire(0);
+    Wire#(Bit#(1)) wr_gpio8_in <- mkDWire(0);
+    Wire#(Bit#(1)) wr_gpio14_in <- mkDWire(0);
+    Wire#(Bit#(1)) wr_gpio15_in <- mkDWire(0);
+//    Wire#(Bit#(1)) wr_gpio16_in <- mkDWire(0);
+//    Wire#(Bit#(1)) wr_gpio17_in <- mkDWire(0);
+//    Wire#(Bit#(1)) wr_gpio18_in <- mkDWire(0);
+//    Wire#(Bit#(1)) wr_gpio19_in <- mkDWire(0);
+//    Wire#(Bit#(1)) wr_gpio20_in <- mkDWire(0);
+//    Wire#(Bit#(1)) wr_gpio21_in <- mkDWire(0);
+//    Wire#(Bit#(1)) wr_gpio22_in <- mkDWire(0);
+//    Wire#(Bit#(1)) wr_gpio23_in <- mkDWire(0);
+//    Wire#(Bit#(1)) wr_gpio24_in <- mkDWire(0);
+//    Wire#(Bit#(1)) wr_gpio25_in <- mkDWire(0);
+//    Wire#(Bit#(1)) wr_gpio26_in <- mkDWire(0);
+//    Wire#(Bit#(1)) wr_gpio27_in <- mkDWire(0);
+//    Wire#(Bit#(1)) wr_gpio28_in <- mkDWire(0);
+//    Wire#(Bit#(1)) wr_gpio29_in <- mkDWire(0);
+//    Wire#(Bit#(1)) wr_gpio30_in <- mkDWire(0);
+//    Wire#(Bit#(1)) wr_gpio31_in <- mkDWire(0);
+
+
+{% if debug == 'yes' %}
+
+Bit#(`num_harts) lv_haveresets=0;
+Bit#(`num_harts) lv_debugenable=0;
+Wire#(Bit#(`num_harts)) wr_hart_interrupts <- mkWire();
+for (Integer i = 0; i<`num_harts; i = i + 1) begin
+  lv_haveresets[i] = ccore.mv_core_is_reset;
+  lv_debugenable[i] = ccore.mv_core_debugenable;
+  /*doc:rule: */
+  rule rl_connect_debug_interrupt;
+    ccore.ma_debug_interrupt(wr_hart_interrupts[i]);
+  endrule:rl_connect_debug_interrupt
+  /*doc:rule: */
+  rule rl_connect_available; 
+    ccore.ma_debugger_available(1);
+  endrule:rl_connect_available
+end
+mkConnection(clint.ma_stop_count,ccore.mv_stop_timer);
+{% endif %} 
+
+		//Rule to connect PLIC interrupt to the core's sideband
+		rule rl_core_plic_connection;
+			ccore.sb_plic_meip(mixed_cluster.sb_ext_interrupt[0]);
+		endrule
+		rule rl_core_plic_c1_connection;
+			ccore.sb_plic_seip(mixed_cluster.sb_ext_interrupt[1]);
+		endrule
+
+    rule connect_interrupt_lines;
+      mixed_cluster.interrupts({spi_cluster.spi0_sb_interrupt,
+                                spi_cluster.spi1_sb_interrupt,
+                                wr_ext_interrupts, uart_cluster.uart_interrupts, 6'b000000});//, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0});// pwm_cluster.pwm0_sb_interrupt, 
+//                                                  pwm_cluster.pwm1_sb_interrupt, 
+//                                                  pwm_cluster.pwm2_sb_interrupt, 
+//                                                  pwm_cluster.pwm3_sb_interrupt, 
+//                                                  pwm_cluster.pwm4_sb_interrupt, 
+//                                                  pwm_cluster.pwm5_sb_interrupt});
+    endrule 
+
+      
+    // ------------------------------------------------------------------------------------------/
+   	mkConnection(ccore.master_d,	fabric.v_from_masters[`Mem_master_num]);
+   	mkConnection(ccore.master_i, fabric.v_from_masters[`Fetch_master_num]);
+    {% if simulate == 'yes' %}
+    mkConnection(signature.master, fabric.v_from_masters[`Sign_master_num]);
+    {% endif %} 
+
+  	mkConnection (fabric.v_to_slaves [`Clint_slave_num ],clint.slave);
+    mkConnection (fabric.v_to_slaves [`FastErr_slave_num ] , fast_err_slave.slave);
+  //`ifdef debug 
+    // mkConnection (fabric.v_to_slaves [`Debug_slave_num ] , debug_memory.slave);
+  //`endif
+    mkConnection (fabric.v_to_slaves [`Slow_fabric_slave_num], slow_fabric.v_from_masters[0]);
+    mkConnection (fabric.v_to_slaves [`Boot_slave_num], boot.slave);
+
+    // sideband connection
+    mkConnection(ccore.sb_clint_msip,clint.sb_clint_msip);
+    mkConnection(ccore.sb_clint_mtip,clint.sb_clint_mtip);
+    mkConnection(ccore.sb_clint_mtime,clint.sb_clint_mtime);
+
+//    mkConnection (slow_fabric.v_to_slaves [`PWMCluster_slave_num], pwm_cluster.slave);
+    mkConnection (slow_fabric.v_to_slaves [`UARTCluster_slave_num], uart_cluster.slave);
+    mkConnection (slow_fabric.v_to_slaves [`SPICluster_slave_num], spi_cluster.slave);
+    mkConnection (slow_fabric.v_to_slaves [`MixedCluster_slave_num], mixed_cluster.slave);
+    mkConnection (slow_fabric.v_to_slaves [`Err_slave_num ] , err_slave.slave);
+    {% if simulate=="yes"%}
+
+    mkConnection (fabric.v_to_slaves [`Sign_slave_num ] , signature.slave);
+    {% endif%}
+
+    rule connect_pinmux_peripheral_output_lines;
+//      mixed_cluster.pinmuxtop_peripheral_side.pwm0.out.put(pwm_cluster.pwm0_io);
+//      mixed_cluster.pinmuxtop_peripheral_side.pwm1.out.put(pwm_cluster.pwm1_io);
+//      mixed_cluster.pinmuxtop_peripheral_side.pwm2.out.put(pwm_cluster.pwm2_io);
+//      mixed_cluster.pinmuxtop_peripheral_side.pwm3.out.put(pwm_cluster.pwm3_io);
+//      mixed_cluster.pinmuxtop_peripheral_side.pwm4.out.put(pwm_cluster.pwm4_io);
+//      mixed_cluster.pinmuxtop_peripheral_side.pwm5.out.put(pwm_cluster.pwm5_io);
+
+mixed_cluster.pinmuxtop_peripheral_side.gpioa.out.put(
+	{ 
+{% for i in gpio_out | reverse %}  
+mixed_cluster.gpio_io.gpio_out[{{i}}]
+{% if not loop.last %},{% endif %}
+{% endfor %}
+} );
+mixed_cluster.pinmuxtop_peripheral_side.gpioa.out_en.put(
+	{ 
+{% for i in gpio_out | reverse %}  
+mixed_cluster.gpio_io.gpio_out_en[{{i}}]
+{% if not loop.last %},{% endif %}
+{% endfor %}              
+} );
+
+		   mixed_cluster.pinmuxtop_peripheral_side.mspi.clk_out.put(spi_cluster.spi1_io.sclk_out);
+		   mixed_cluster.pinmuxtop_peripheral_side.mspi.clk_outen.put(spi_cluster.spi1_io.sclk_outen);
+		   mixed_cluster.pinmuxtop_peripheral_side.mspi.nss_out.put(spi_cluster.spi1_io.ncs_out);
+		   mixed_cluster.pinmuxtop_peripheral_side.mspi.nss_outen.put(spi_cluster.spi1_io.ncs_outen);
+		   mixed_cluster.pinmuxtop_peripheral_side.mspi.mosi_out.put(spi_cluster.spi1_io.mosi_out);
+		   mixed_cluster.pinmuxtop_peripheral_side.mspi.mosi_outen.put(spi_cluster.spi1_io.mosi_outen);
+		   mixed_cluster.pinmuxtop_peripheral_side.mspi.miso_out.put(spi_cluster.spi1_io.miso_out);
+		   mixed_cluster.pinmuxtop_peripheral_side.mspi.miso_outen.put(spi_cluster.spi1_io.miso_outen);
+
+		   mixed_cluster.pinmuxtop_peripheral_side.uart1.tx.put(uart_cluster.uart1_io.sout);
+//		   mixed_cluster.pinmuxtop_peripheral_side.uart2.tx.put(uart_cluster.uart2_io.sout);
+    endrule
+
+    rule connect_pinmux_peripheral_input_lines;
+		  let pinmux_gpio_in <- (mixed_cluster.pinmuxtop_peripheral_side.gpioa.in.get);
+      let gpio_in_combined = unpack({
+//			  wr_gpio31_in,
+//			  wr_gpio30_in,
+//			  wr_gpio29_in,
+//			  wr_gpio28_in,
+//			  wr_gpio27_in,
+//			  wr_gpio26_in,
+//			  wr_gpio25_in,
+//			  wr_gpio24_in,
+//			  wr_gpio23_in,
+//			  wr_gpio22_in,
+//			  wr_gpio21_in,
+//			  wr_gpio20_in,
+//			  wr_gpio19_in,
+//			  wr_gpio18_in,
+//			  wr_gpio17_in,
+//			  wr_gpio16_in,
+			  wr_gpio15_in,
+			  wr_gpio14_in,
+			  pinmux_gpio_in[10],
+			  pinmux_gpio_in[9],
+			  pinmux_gpio_in[8],
+			  pinmux_gpio_in[7],
+			  pinmux_gpio_in[6],
+			  wr_gpio8_in,
+			  wr_gpio7_in,
+			  pinmux_gpio_in[5],
+			  pinmux_gpio_in[4],
+			  wr_gpio4_in,
+			  pinmux_gpio_in[3],
+			  pinmux_gpio_in[2],
+			  pinmux_gpio_in[1],
+			  pinmux_gpio_in[0]	});
+		   mixed_cluster.gpio_io.gpio_in(gpio_in_combined);
+
+		   let pinmux_spi1_miso <- mixed_cluster.pinmuxtop_peripheral_side.mspi.miso_in.get;
+		   let pinmux_spi1_mosi <- mixed_cluster.pinmuxtop_peripheral_side.mspi.mosi_in.get;
+		   let pinmux_spi1_clk <- mixed_cluster.pinmuxtop_peripheral_side.mspi.clk_in.get;
+		   let pinmux_spi1_nss <- mixed_cluster.pinmuxtop_peripheral_side.mspi.nss_in.get;
+		   spi_cluster.spi1_io.miso_in(pinmux_spi1_miso);
+		   spi_cluster.spi1_io.mosi_in(pinmux_spi1_mosi);
+		   spi_cluster.spi1_io.sclk_in(pinmux_spi1_clk);
+		   spi_cluster.spi1_io.ncs_in(pinmux_spi1_nss);
+
+		   let pinmux_uart1_rx <- (mixed_cluster.pinmuxtop_peripheral_side.uart1.rx.get);
+		   uart_cluster.uart1_io.sin(pinmux_uart1_rx);
+//		   let pinmux_uart2_rx <- (mixed_cluster.pinmuxtop_peripheral_side.uart2.rx.get);
+//		   uart_cluster.uart2_io.sin(pinmux_uart2_rx);
+    endrule
+
+
+    interface soc_sb = interface Ifc_soc_sb
+    {% if rtldump=="yes"%}
+      interface commitlog= ccore.commitlog;
+      interface sbread = ccore.sbread;
+    {% endif %}
+      interface to_debug_master = fabric.v_from_masters[`Debug_master_num];
+      interface to_debug_slave = fabric.v_to_slaves[`Debug_slave_num];
+      method Action ma_hart_interrupts (Bit#(`num_harts) i);
+        wr_hart_interrupts <= i;
+      endmethod
+      method mv_harts_have_reset = lv_haveresets;
+      method mv_core_debugenable = lv_debugenable;
+    endinterface;
+
+  interface chip_io = interface Ifc_chip_io
+  {% for i in gpio %}
+  method Action  gpio_{{i}}(Bit#(1) in);
+	   wr_gpio{{i}}_in <= in;
+  endmethod
+{% endfor %}
+//    method Action  gpio_16(Bit#(1) in);
+//         wr_gpio16_in <= in;
+//    endmethod
+//    method Action  gpio_17(Bit#(1) in);
+//         wr_gpio17_in <= in;
+//    endmethod
+//    method Action  gpio_18(Bit#(1) in);
+//         wr_gpio18_in <= in;
+//    endmethod
+//    method Action  gpio_19(Bit#(1) in);
+//         wr_gpio19_in <= in;
+//    endmethod
+//    method Action  gpio_20(Bit#(1) in);
+//         wr_gpio20_in <= in;
+//    endmethod
+//    method Action  gpio_21(Bit#(1) in);
+//         wr_gpio21_in <= in;
+//    endmethod
+//    method Action  gpio_22(Bit#(1) in);
+//         wr_gpio22_in <= in;
+//    endmethod
+//    method Action  gpio_23(Bit#(1) in);
+//         wr_gpio23_in <= in;
+//    endmethod
+//    method Action  gpio_24(Bit#(1) in);
+//         wr_gpio24_in <= in;
+//    endmethod
+//    method Action  gpio_25(Bit#(1) in);
+//         wr_gpio25_in <= in;
+//    endmethod
+//    method Action  gpio_26(Bit#(1) in);
+//         wr_gpio26_in <= in;
+//    endmethod
+//    method Action  gpio_27(Bit#(1) in);
+//         wr_gpio27_in <= in;
+//    endmethod
+//    method Action  gpio_28(Bit#(1) in);
+//         wr_gpio28_in <= in;
+//    endmethod
+//    method Action  gpio_29(Bit#(1) in);
+//         wr_gpio29_in <= in;
+//    endmethod
+//    method Action  gpio_30(Bit#(1) in);
+//         wr_gpio30_in <= in;
+//    endmethod
+//    method Action  gpio_31(Bit#(1) in);
+//         wr_gpio31_in <= in;
+//    endmethod
+
+{% for i in gpio %}
+method Bit#(1)gpio_{{i}}_out = mixed_cluster.gpio_io.gpio_out[{{i}}];
+endmethod
+{% endfor %}
+//    method Bit#(1)gpio_16_out = mixed_cluster.gpio_io.gpio_out[16];
+//    method Bit#(1)gpio_17_out = mixed_cluster.gpio_io.gpio_out[17];
+//    method Bit#(1)gpio_18_out = mixed_cluster.gpio_io.gpio_out[18];
+//    method Bit#(1)gpio_19_out = mixed_cluster.gpio_io.gpio_out[19];
+//    method Bit#(1)gpio_20_out = mixed_cluster.gpio_io.gpio_out[20];
+//    method Bit#(1)gpio_21_out = mixed_cluster.gpio_io.gpio_out[21];
+//    method Bit#(1)gpio_22_out = mixed_cluster.gpio_io.gpio_out[22];
+//    method Bit#(1)gpio_23_out = mixed_cluster.gpio_io.gpio_out[23];
+//    method Bit#(1)gpio_24_out = mixed_cluster.gpio_io.gpio_out[24];
+//    method Bit#(1)gpio_25_out = mixed_cluster.gpio_io.gpio_out[25];
+//    method Bit#(1)gpio_26_out = mixed_cluster.gpio_io.gpio_out[26];
+//    method Bit#(1)gpio_27_out = mixed_cluster.gpio_io.gpio_out[27];
+//    method Bit#(1)gpio_28_out = mixed_cluster.gpio_io.gpio_out[28];
+//    method Bit#(1)gpio_29_out = mixed_cluster.gpio_io.gpio_out[29];
+//    method Bit#(1)gpio_30_out = mixed_cluster.gpio_io.gpio_out[30];
+//    method Bit#(1)gpio_31_out = mixed_cluster.gpio_io.gpio_out[31];
+
+{% for i in gpio %}
+method gpio_{{i}}_outen = mixed_cluster.gpio_io.gpio_out_en[{{i}}];
+{% endfor %} 
+//    method gpio_16_outen = mixed_cluster.gpio_io.gpio_out_en[16];
+//    method gpio_17_outen = mixed_cluster.gpio_io.gpio_out_en[17];
+//    method gpio_18_outen = mixed_cluster.gpio_io.gpio_out_en[18];
+//    method gpio_19_outen = mixed_cluster.gpio_io.gpio_out_en[19];
+//    method gpio_20_outen = mixed_cluster.gpio_io.gpio_out_en[20];
+//    method gpio_21_outen = mixed_cluster.gpio_io.gpio_out_en[21];
+//    method gpio_22_outen = mixed_cluster.gpio_io.gpio_out_en[22];
+//    method gpio_23_outen = mixed_cluster.gpio_io.gpio_out_en[23];
+//    method gpio_24_outen = mixed_cluster.gpio_io.gpio_out_en[24];
+//    method gpio_25_outen = mixed_cluster.gpio_io.gpio_out_en[25];
+//    method gpio_26_outen = mixed_cluster.gpio_io.gpio_out_en[26];
+//    method gpio_27_outen = mixed_cluster.gpio_io.gpio_out_en[27];
+//    method gpio_28_outen = mixed_cluster.gpio_io.gpio_out_en[28];
+//    method gpio_29_outen = mixed_cluster.gpio_io.gpio_out_en[29];
+//    method gpio_30_outen = mixed_cluster.gpio_io.gpio_out_en[30];
+//    method gpio_31_outen = mixed_cluster.gpio_io.gpio_out_en[31];
+    interface spi0_io = spi_cluster.spi0_io;
+//    interface spi1_io = spi_cluster.spi1_io;
+    interface uart0_io = uart_cluster.uart0_io;
+		method  i2c0_out = mixed_cluster.i2c0_out;									//I2c IO interface
+//		method  i2c1_out = mixed_cluster.i2c1_out;									//I2c IO interface
+    interface iocell_io = mixed_cluster.pinmuxtop_iocell_side;						//GPIO IO interface
+//    interface xadc_master = mixed_cluster.xadc_master;
+    interface eth_master = slow_fabric.v_to_slaves[`Eth_slave_num];
+    interface mem_master = fabric.v_to_slaves [`Memory_slave_num];
+    method Action ext_interrupts(Bit#(2) i);
+      wr_ext_interrupts <= i;
+    endmethod
+  endinterface;
+
+  endmodule: mkSoc
+endpackage: Soc

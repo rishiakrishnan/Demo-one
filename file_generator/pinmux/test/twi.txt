@@ -1,0 +1,2 @@
+sda	inout
+scl	inout

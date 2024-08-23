@@ -1,0 +1,18 @@
+#SOC.BSV
+soc_spi: [1, 2, 3, 5]
+soc_uart: [10, 20, 30]
+soc_pinmux_uart: [100, 200, 300]
+soc_gpio: [5, 4, 3]
+soc_pwm: [15, 25, 35]
+soc_gpio_io: [0, 1, 2, 3]
+
+#PINMUX.BSV
+
+
+#above space is for pinmux
+
+#spi cluster
+SPI_spi: [1, 2, 3, 5]
+
+#uart cluster
+UART_uart: [40,30,40,20,60]

@@ -1,0 +1,6 @@
+clk	out
+cmd	out
+d0	inout
+d1	inout
+d2	inout
+d3	inout

@@ -1,0 +1,4 @@
+sclk	out
+mosi	out
+ss	out
+miso	in

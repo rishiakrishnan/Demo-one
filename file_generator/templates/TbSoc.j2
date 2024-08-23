@@ -1,0 +1,582 @@
+/*
+Copyright (c) 2018, IIT Madras All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted
+provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this list of conditions
+  and the following disclaimer.
+* Redistributions in binary form must reproduce the above copyright notice, this list of
+  conditions and the following disclaimer in the documentation and/or other materials provided
+ with the distribution.
+* Neither the name of IIT Madras  nor the names of its contributors may be used to endorse or
+  promote products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS
+OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+--------------------------------------------------------------------------------------------------
+
+Author: Neel Gala
+Email id: neelgala@gmail.com
+Details:
+
+--------------------------------------------------------------------------------------------------
+*/
+package TbSoc;
+  import Vector :: *;
+  import Soc:: *;
+  import DebugSoc :: *;
+  import Clocks::*;
+  import GetPut:: *;
+	import Semi_FIFOF:: *;
+	import AXI4_Types:: *;
+	import AXI4_Fabric:: *;
+  import uart::*;
+	import ccore_types::*;
+  `include "ccore_params.defines"
+  `include "Logger.bsv"
+  `include "Soc.defines"
+  `include "csrbox.defines"
+  import device_common::*;
+  import DReg :: *;
+  import bram :: *;
+  import Connectable :: *;
+  import bootrom :: *;
+  import i2c :: * ;
+  import pinmux :: * ;
+  import sspi :: * ;
+  import csrbox_decoder :: *;
+  import csrbox :: *;
+  import csr_types :: *;
+
+  import TriState :: * ;
+
+`define limit 'd10000000
+
+`ifdef openocd
+  import "BDPI" function ActionValue #(int) init_rbb_jtag(Bit#(1) dummy);
+  import "BDPI" function ActionValue #(Bit #(8))get_frame(int client_fd);
+  import "BDPI" function Action send_tdo(Bit #(1) tdo , int client_fd);
+`endif
+
+    function Bit#(`xlen) fn_atomic_op (Bit#(5) op,  Bit#(`xlen) rs2,  Bit#(`xlen) loaded);
+      Bit#(`xlen) op1 = loaded;
+      Bit#(`xlen) op2 = rs2;
+    `ifdef RV64
+      if(op[4]==0)begin
+	  		op1=signExtend(loaded[31:0]);
+        op2= signExtend(rs2[31:0]);
+      end
+    `endif
+      Int#(`xlen) s_op1 = unpack(op1);
+	  	Int#(`xlen) s_op2 = unpack(op2);
+
+      case (op[3:0])
+	  			'b0011:return op2;
+	  			'b0000:return (op1+op2);
+	  			'b0010:return (op1^op2);
+	  			'b0110:return (op1&op2);
+	  			'b0100:return (op1|op2);
+	  			'b1100:return min(op1,op2);
+	  			'b1110:return max(op1,op2);
+	  			'b1000:return pack(min(s_op1,s_op2));
+	  			'b1010:return pack(max(s_op1,s_op2));
+	  			default:return op1;
+	  		endcase
+    endfunction
+
+    `ifdef spfpu
+    function Bool fn_fflags_print (Bit#(7) funct7,Bit#(7) opcode, Bool irf);
+      if ((!irf ||
+          funct7[6:1] == 'b110000 ||  //fcvt.w.s/d instr
+          funct7[6:1] == 'b101000) && //fcmp
+          !(funct7[6:1] == 'b111000 && opcode == 'b1010011)&&  //fmv.x.w and fmv.x.d
+          !(funct7[6:1] == 'b111100 && opcode == 'b1010011) &&  //fmv.w.x and fmv.w.d
+          !(funct7[6:1] == 'b001000 && opcode == 'b1010011))    //fsgnj*
+        return True;
+      else
+        return False;
+    endfunction
+  `endif
+
+
+  (*synthesize*)
+  module mkTbSoc(Empty);
+
+  `ifdef debug
+    MakeClockIfc#(Bit#(1)) tck_clk <-mkUngatedClock(1);
+    MakeResetIfc trst <- mkReset(0,False,tck_clk.new_clk);
+  `endif
+//RISHI CHANGE
+    Ifc_bram_axi4#({{paddr}}, XLEN, 0,  25) bram <- mkbram_axi4('h8000_0000, "code.mem","BRAM");
+    Ifc_bram_axi4lite#({{paddr}}, Ifc_bram_x_data_para, Ifc_bram_x_conf_para, Ifc_bram_x_four) xbram <- mkbram_axi4lite(h4_1000, "boot1.mem", "BRAM")
+    {{Ifc_bram_eth}}
+
+    /*doc:wire: */
+    Wire#(Bit#(32)) wr_reset_pc <- mkDWire(`MemoryBase);
+    rule set_reset_pc;
+      let bootmode <- $test$plusargs("debugmode");
+      if(bootmode)
+        wr_reset_pc <= `DebugBase;
+    endrule
+
+
+  `ifdef debug
+    Ifc_DebugSoc soc <- mkDebugSoc(tck_clk.new_clk, trst.new_rst);
+  `else
+    Ifc_Soc soc <- mkSoc;
+  `endif
+
+  `ifdef rtldump
+    `include "csr_probe.bsv"
+  `endif
+
+		// ------------------- SDRAM connections ----------------------------------//
+    mkConnection(soc.chip_io.mem_master, bram.slave);
+    mkConnection(soc.chip_io.xadc_master, xbram.slave);
+    mkConnection(soc.chip_io.eth_master, eth0.slave);
+
+    UserInterface#({{paddr}},XLEN,16) uart0 <- mkuart_user(5,0,0);
+    UserInterface#({{paddr}},XLEN,16) uart1 <- mkuart_user(5,0,0);
+    UserInterface#({{paddr}},XLEN,16) uart2 <- mkuart_user(5,0,0);
+    Reg#(Bool) rg_read_rx<- mkDRegA(False);
+
+    Reg#(Bit#(5)) rg_cnt <-mkRegA(0);
+
+    Vector#(100, String) string_field;
+    for (Integer i = 0; i<100; i = i + 1) begin
+      string_field[i] = integerToString(i);
+    end
+
+    /*doc:reg: */
+    Reg#(Bit#(32)) rg_inst_count <- mkReg(0);
+
+    rule display_eol;
+	    let timeval <- $time;
+      `logLevel( tb, 0, $format("\n[%10d]", timeval))
+    endrule
+
+  `ifdef rtldump
+  Reg#(Bit#(`xlen)) rg_prev_mstatus <- mkReg(0);
+  Reg#(Bool) rg_prev_mstatus_valid <- mkReg(False);
+  Bit#(XLEN) lv_misa_init = 0;
+  `ifdef RV64
+    lv_misa_init[63:62] = 2'b10;
+  `else
+    lv_misa_init[31:30] = 2'b01;
+  `endif
+  `ifdef atomic
+    lv_misa_init[0] = 1;
+  `endif
+  `ifdef compressed
+    lv_misa_init[2] = 1;
+  `endif
+  `ifdef dpfpu
+    lv_misa_init[3] = 1;
+  `endif
+  `ifdef spfpu
+    lv_misa_init[5] = 1;
+  `endif
+  lv_misa_init[8] = 1;  //Base I isa.
+  `ifdef muldiv
+    lv_misa_init[12] = 1;
+  `endif
+  `ifdef usertraps
+    lv_misa_init[13] = 1;
+  `endif
+  `ifdef supervisor
+    lv_misa_init[18] = 1;
+  `endif
+  `ifdef user
+    lv_misa_init[20] = 1;
+  `endif
+  Reg#(Bit#(XLEN)) rg_prev_misa <- mkReg(lv_misa_init);
+ 	  let dump <- mkReg(InvalidFile) ;
+    rule open_file_rtldump(rg_cnt<1);
+      let generate_dump <- $test$plusargs("rtldump");
+      if(generate_dump) begin
+        String dumpFile = "rtl.dump" ;
+    	  File lfh <- $fopen( dumpFile, "w" ) ;
+    	  if ( lfh == InvalidFile )begin
+    	    `logLevel( tb, 0, $format("TB: cannot open %s", dumpFile))
+    	    $finish(0);
+    	  end
+    	  dump <= lfh ;
+      end
+    endrule
+  `endif
+
+ 	  let dump1 <- mkRegA(InvalidFile) ;
+    rule open_file_app(rg_cnt<5);
+      String dumpFile1 = "app_log" ;
+    	File lfh1 <- $fopen( dumpFile1, "w" ) ;
+    	if (lfh1==InvalidFile )begin
+    	  `logLevel( tb, 0, $format("TB: cannot open %s", dumpFile1))
+    	  $finish(0);
+    	end
+      dump1 <= lfh1;
+    	rg_cnt <= rg_cnt+1 ;
+    endrule
+
+    rule connect_uart0_out;
+      soc.chip_io.uart0_io.sin(uart0.io.sout);
+    endrule
+    rule connect_uart0_in;
+      uart0.io.sin(soc.chip_io.uart0_io.sout);
+    endrule
+   
+    // -------- when uart1 is enabled through pinmux ----------//
+    rule connect_uart1_out(soc.chip_io.iocell_io.io7_cell_outen==1);
+      soc.chip_io.iocell_io.io8_cell_in(uart1.io.sout);
+    endrule
+    rule connect_uart1_in(soc.chip_io.iocell_io.io8_cell_outen==0);
+      uart1.io.sin(soc.chip_io.iocell_io.io8_cell_out);
+    endrule
+    // --------------------------------------------------------//
+    
+    // -------- when uart1 is enabled through pinmux ----------//
+    rule connect_uart2_out(soc.chip_io.iocell_io.io9_cell_outen==1);
+      soc.chip_io.iocell_io.io10_cell_in(uart2.io.sout);
+    endrule
+    rule connect_uart2_in(soc.chip_io.iocell_io.io10_cell_outen==0);
+      uart2.io.sin(soc.chip_io.iocell_io.io10_cell_out);
+    endrule
+    // --------------------------------------------------------//
+
+    rule check_if_character_present(!rg_read_rx);
+      let {data,err}<- uart0.read_req('hc,HWord);
+      if (data[2]==1) // character present
+        rg_read_rx<=True;
+    endrule
+
+    rule write_received_character(rg_cnt>=5 && rg_read_rx);
+      let {data,err}<-uart0.read_req('h8,Byte);
+      $fwrite(dump1,"%c",data);
+    endrule
+
+    rule drive_constants;
+      soc.chip_io.gpio_14(0);
+      soc.chip_io.gpio_15(0);
+      soc.chip_io.gpio_16(0);
+      soc.chip_io.gpio_17(0);
+      soc.chip_io.gpio_18(0);
+      soc.chip_io.gpio_19(0);
+      soc.chip_io.gpio_20(0);
+      soc.chip_io.gpio_21(0);
+      soc.chip_io.gpio_22(0);
+      soc.chip_io.gpio_23(0);
+      soc.chip_io.gpio_24(0);
+      soc.chip_io.gpio_25(0);
+      soc.chip_io.gpio_26(0);
+      soc.chip_io.gpio_27(0);
+      soc.chip_io.gpio_28(0);
+      soc.chip_io.gpio_29(0);
+      soc.chip_io.gpio_30(0);
+      soc.chip_io.gpio_31(0);
+      soc.chip_io.gpio_4(0);
+      soc.chip_io.gpio_7(0);
+      soc.chip_io.gpio_8(0);
+      soc.chip_io.iocell_io.io7_cell_in(0);
+      soc.chip_io.iocell_io.io9_cell_in(0);
+      soc.chip_io.iocell_io.io12_cell_in(0);
+      soc.chip_io.iocell_io.io13_cell_in(0);
+      soc.chip_io.iocell_io.io16_cell_in(0);
+      soc.chip_io.iocell_io.io17_cell_in(0);
+      soc.chip_io.iocell_io.io18_cell_in(0);
+      soc.chip_io.iocell_io.io19_cell_in(0);
+      soc.chip_io.iocell_io.io20_cell_in(0);
+    endrule
+
+    rule rl_drive_consts_i2c;
+      soc.chip_io.i2c0_out.scl_in(0);
+      soc.chip_io.i2c1_out.scl_in(0);
+      soc.chip_io.i2c0_out.sda_in(0);
+      soc.chip_io.i2c1_out.sda_in(0);
+    endrule: rl_drive_consts_i2c
+    rule rl_drive_consts_sspi;
+      soc.chip_io.spi0_io.mosi_in(0);
+      soc.chip_io.spi0_io.sclk_in(0);
+      soc.chip_io.spi0_io.miso_in(0);
+      soc.chip_io.spi0_io.ncs_in(0);
+    endrule
+
+
+    rule rl_connect_interrupts;
+      soc.chip_io.ext_interrupts(0);
+    endrule
+
+  `ifdef rtldump
+
+    rule write_dump_file(rg_cnt >= 1);
+
+      let generate_dump <- $test$plusargs("rtldump");
+      let stime <- $stime;
+      if (soc.commitlog matches tagged Valid .idump) begin
+    `ifndef openocd `ifndef cocotb_sim
+      if(idump.instruction=='h00006f||idump.instruction =='h00a001)
+        $finish(0);
+      else
+    `endif `endif
+      if(generate_dump) begin
+        if (rg_inst_count % `limit == 0 && rg_inst_count != 0) begin
+          File lfh1 <- $fopen( "rtl"+string_field[rg_inst_count/`limit ]+".dump","w");
+          dump <= lfh1;
+        end
+        rg_inst_count <= rg_inst_count + 1;
+
+        if (idump.instruction[1:0] == 'b11)
+        	$fwrite(dump, "core   0: ", idump.mode, `ifdef hypervisor " %1d", idump.v, `endif " 0x%16h", idump.pc, " (0x%8h", idump.instruction, ")");
+        else
+          $fwrite(dump, "core   0: ", idump.mode, `ifdef hypervisor " %1d", idump.v, `endif " 0x%16h", idump.pc, " (0x%4h", idump.instruction[15:0], ")");
+
+        if (idump.inst_type matches tagged REG .d) begin
+
+        `ifdef spfpu
+        if (!(idump.instruction[31:25] =='b0001001 && idump.instruction[14:0] == 'b000000001110011)) begin
+          Bit#(`xlen) wdata_fflags = fn_probe_csr(`FFLAGS);
+          Bit#(`xlen) flags = zeroExtend(d.fflags);
+        // !flags &&
+        if( flags!=0 && fn_fflags_print(idump.instruction[31:25],idump.instruction[6:0], d.irf)) begin 
+          //Flags not zero. Destination reg is FRF.
+          if (valueOf(`flen) == 64) begin
+            $fwrite(dump, " ", fn_csr_to_str(`FFLAGS), " 0x%16h", wdata_fflags);
+          end
+          if (valueOf(`flen) == 32) begin
+            $fwrite(dump, " ", fn_csr_to_str(`FFLAGS), " 0x%8h", wdata_fflags);
+          end
+        end
+        end
+      `endif
+          // let csr_address = `FFLAGS; // mstatus
+          // Bit#(`xlen) wdata = fn_probe_csr(`ifdef hypervisor fn_address_virtual(csr_address,idump.v) `else csr_address `endif );
+          if (!((idump.instruction[31:25] =='b0001001 || idump.instruction[31:25]== 'b0010001 || 
+               idump.instruction[31:25] =='b0110001)&& idump.instruction[14:0] == 'b000000001110011)) begin
+            if (d.irf && valueOf(`xlen) == 64 && d.rd != 0)
+              $fwrite(dump, " x%0d", d.rd, " 0x%16h", d.wdata);
+            if (d.irf && valueOf(`xlen) == 32 && d.rd != 0)
+              $fwrite(dump, " x%0d", d.rd, " 0x%8h", d.wdata);
+            if (!d.irf && valueOf(`flen) == 64) begin
+              // $fwrite(dump, " ", fn_csr_to_str(`ifdef hypervisor fn_address_virtual(csr_address,idump.v) `else csr_address `endif ), " 0x%16h", wdata);
+              $fwrite(dump, " f%0d", d.rd, " 0x%16h", d.wdata);
+            end
+            if (!d.irf && valueOf(`flen) == 32) begin
+              // $fwrite(dump, " " , fn_csr_to_str(`ifdef hypervisor fn_address_virtual(csr_address,idump.v) `else csr_address `endif ), " 0x%16h", wdata);
+              $fwrite(dump, " f%0d", d.rd, " 0x%8h", d.wdata);
+            end
+          end
+        end
+
+        if (idump.inst_type matches tagged CSR .d) begin
+          let csr_address = d.csr_address;
+          csr_address = `ifdef hypervisor fn_address_virtual(csr_address, idump.v) `else csr_address `endif ;
+        `ifdef supervisor
+          `ifdef hypervisor if (idump.v == 0) `endif
+            if (csr_address == `SSTATUS || csr_address == `SIE || csr_address == `SIP) begin
+              csr_address = csr_address + 'h200;
+            end
+        `endif
+        `ifdef hypervisor
+          if (csr_address == `HIE || csr_address == `HIP)
+            csr_address = csr_address - 'h300; // convert to MIE/MIP
+          else if (csr_address == `VSIE || csr_address == `VSIP)
+            csr_address = csr_address + 'h100; // convert to MIE/MIP
+          else if (csr_address == `HVIP)
+            csr_address = `MIP; // convert to MIP
+        `endif
+          if (valueOf(`xlen) == 64 && d.rd != 0)
+            $fwrite(dump, " x%0d", d.rd, " 0x%16h", d.rdata);
+          if (valueOf(`xlen) == 32 && d.rd != 0)
+            $fwrite(dump, " x%0d", d.rd, " 0x%8h", d.rdata);
+          Bit#(`xlen) wdata = fn_probe_csr(csr_address);
+          if (!(d.op==2'b10 && idump.instruction[19:15] == 0)) begin
+            //$display("Tb: Dumping instruction: %h", idump.instruction);
+           `logLevel( tb, 0, $format("\n %h", idump.instruction))
+           `ifdef hypervisor
+            if(idump.instruction=='h10200073 && csr_address== 'h300) begin //sret
+              Bit#(`xlen) hstatus = fn_probe_csr('h600);
+              //$display("Tb: %h", hstatus);
+              `logLevel( tb, 0, $format("\n hstatus: %h", hstatus))
+              $fwrite(dump, " c1536_hstatus 0x%16h", hstatus);
+            end
+            `endif
+            if (csr_address != `FCSR && csr_address != `MISA ) begin
+            if (valueOf(`xlen) == 64) 
+              $fwrite(dump, " ", fn_csr_to_str(csr_address), " 0x%16h", wdata);
+            if (valueOf(`xlen) == 32)
+              $fwrite(dump, " " , fn_csr_to_str(csr_address), " 0x%8h", wdata);
+
+            if (csr_address == `MSTATUS) begin
+              rg_prev_mstatus <= wdata;
+              rg_prev_mstatus_valid <= True;
+            end
+
+           
+
+            end
+            if( csr_address == `MISA) begin
+            if (wdata != rg_prev_misa) begin
+              if (valueOf(`xlen) == 64) 
+                $fwrite(dump, " ", fn_csr_to_str(csr_address), " 0x%16h", wdata);
+              if (valueOf(`xlen) == 32)
+                $fwrite(dump, " " , fn_csr_to_str(csr_address), " 0x%8h", wdata);
+              rg_prev_misa <= wdata;
+            end
+          end
+          end
+        `ifdef spfpu
+        if (csr_address == `FCSR) begin
+          Bit#(`xlen) wdata_fflags = fn_probe_csr(`FFLAGS);
+          Bit#(`xlen) wdata_frm = fn_probe_csr(`FRM);
+          if (!(d.op==2'b10 && idump.instruction[19:15] == 0)) begin
+          if (valueOf(`xlen) == 64) begin
+                  $fwrite(dump, " ", fn_csr_to_str(`FFLAGS), " 0x%16h", wdata_fflags);
+                  // if(lv_fssr_print)                     
+                  //   $fwrite(dump, " x%0d", d.rd, " 0x%16h", d.rdata);
+                  $fwrite(dump, " ", fn_csr_to_str(`FRM), " 0x%16h", wdata_frm);
+                end
+          if (valueOf(`xlen) == 32) begin
+            $fwrite(dump, " ", fn_csr_to_str(`FFLAGS), " 0x%8h", wdata_fflags);
+            // if(lv_fssr_print)
+            //   $fwrite(dump, " x%0d", d.rd, " 0x%8h", d.rdata);
+            $fwrite(dump, " ", fn_csr_to_str(`FRM), " 0x%8h", wdata_frm);
+          end
+          end
+        end
+          if (csr_address == `FCSR || csr_address == `FRM || csr_address == `FFLAGS)begin
+            csr_address = `MSTATUS;
+            if ( !rg_prev_mstatus_valid || (wdata!=rg_prev_mstatus)   ) begin 
+            if (!(d.op==2'b10 && idump.instruction[19:15] == 0)) begin
+              if (valueOf(`xlen) == 64) 
+                $fwrite(dump, " " , fn_csr_to_str(csr_address), " 0x%16h", wdata);
+              if (valueOf(`xlen) == 32)
+                $fwrite(dump, " " , fn_csr_to_str(csr_address), " 0x%8h", wdata);
+
+              rg_prev_mstatus <= wdata;
+              rg_prev_mstatus_valid <= True;
+
+            end
+            end
+          end
+        `endif
+        end
+
+        if (idump.inst_type matches tagged MEM .d) begin
+          let store_data = d.data;
+        `ifdef atomic
+          if (d.access == Atomic && d.atomic_op[3:0] != 5 && d.atomic_op[3:0] != 7) begin
+            store_data = fn_atomic_op(d.atomic_op,d.data, d.commit_data);
+          end
+        `endif
+          if (d.access == Load `ifdef atomic || d.access == Atomic `endif ) begin
+            if (d.irf && valueOf(`xlen) == 64 && d.rd != 0)
+              $fwrite(dump, " x%0d", d.rd, " 0x%16h", d.commit_data);
+            if (d.irf && valueOf(`xlen) == 32 && d.rd != 0)
+              $fwrite(dump, " x%0d", d.rd, " 0x%8h", d.commit_data);
+            if (!d.irf && valueOf(`flen) == 64 )
+              $fwrite(dump, " f%0d", d.rd, " 0x%16h", d.commit_data);
+            if (!d.irf && valueOf(`flen) == 32 )
+              $fwrite(dump, " f%0d", d.rd, " 0x%8h", d.commit_data);
+          end
+
+          if(valueOf(`xlen) ==64 && d.access != Fence && d.access != FenceI)
+            $fwrite(dump, " mem 0x%16h", d.address);
+          if(valueOf(`xlen) ==32&& d.access != Fence && d.access != FenceI)
+            $fwrite(dump, " mem 0x%8h", d.address);
+
+        `ifdef atomic
+          if (d.access == Atomic && d.atomic_op[3:0] != 5 && d.atomic_op[3:0] != 7) begin
+            if(valueOf(`xlen) ==64)
+              $fwrite(dump, " mem 0x%16h", d.address);
+            if(valueOf(`xlen) ==32)
+              $fwrite(dump, " mem 0x%8h", d.address);
+          end
+        `endif
+
+          if (d.access == Store  `ifdef atomic || (d.access == Atomic && d.atomic_op[3:0] != 5) `endif ) begin
+            if (d.size == 0) begin
+              if (store_data[7:4]==0)
+                $fwrite(dump, " 0x%1h", store_data[3:0]);
+              else
+                $fwrite(dump, " 0x%2h", store_data[7:0]);
+            end
+            if (d.size == 1)
+              $fwrite(dump, " 0x%4h", store_data[15:0]);
+            if (d.size == 2)
+              $fwrite(dump, " 0x%8h", store_data[31:0]);
+            if (d.size == 3)
+              $fwrite(dump, " 0x%16h", store_data);
+          end
+        end
+          $fwrite(dump, "\n");
+      end
+
+      end
+    endrule
+  `endif
+
+  `ifdef debug
+    //Wire#(Bit#(1)) wr_tdi <-mkWire(clocked_by tck_clk.new_clk, reset_by trst.new_rst);
+    //Wire#(Bit#(1)) wr_tms <-mkWire(clocked_by tck_clk.new_clk, reset_by trst.new_rst);
+    Wire#(Bit#(1)) wr_tdi <- mkWire();
+    Wire#(Bit#(1)) wr_tms <- mkWire();
+    rule connect_jtag_io;
+      soc.wire_tdi(wr_tdi);
+      soc.wire_tms(wr_tms);
+    endrule
+  `endif
+  `ifdef openocd
+    Wire#(Bit#(1)) wr_tdo <-mkWire();
+    rule rl_wr_tdo;
+      wr_tdo <= soc.wire_tdo();
+    endrule
+    Reg#(Bit#(1)) rg_initial <- mkRegA(0);
+    Reg#(Bit#(1)) rg_end_sim <- mkRegA(0);
+    Reg#(int) rg_client_fd <- mkRegA(32'hffffffff);
+    Reg#(Bit#(5)) delayed_actor <- mkRegA(0);
+    Reg#(Bit#(5)) delayed_actor2 <- mkRegA(0);
+    Reg#(Bit#(5)) delayed_actor3 <- mkRegA(0);
+    Reg#(Bit#(5)) delayed_actor4 <- mkRegA(0);
+    Reg#(Bit#(5)) delayed_actor5 <- mkRegA(0);
+    //Reg#(Bit#(1)) rg_initial <- mkRegA(0, clocked_by tck_clk.new_clk, reset_by trst.new_rst);
+    //Reg#(Bit#(1)) rg_end_sim <- mkRegA(0, clocked_by tck_clk.new_clk, reset_by trst.new_rst);
+    //Reg#(int) rg_client_fd <- mkRegA(32'hffffffff, clocked_by tck_clk.new_clk, reset_by trst.new_rst);
+    //Reg#(Bit#(5)) delayed_actor <- mkRegA(0, clocked_by tck_clk.new_clk, reset_by trst.new_rst);
+    //Reg#(Bit#(5)) delayed_actor2 <- mkRegA(0, clocked_by tck_clk.new_clk, reset_by trst.new_rst);
+    //Reg#(Bit#(5)) delayed_actor3 <- mkRegA(0, clocked_by tck_clk.new_clk, reset_by trst.new_rst);
+    //Reg#(Bit#(5)) delayed_actor4 <- mkRegA(0, clocked_by tck_clk.new_clk, reset_by trst.new_rst);
+    //Reg#(Bit#(5)) delayed_actor5 <- mkRegA(0, clocked_by tck_clk.new_clk, reset_by trst.new_rst);
+    rule rl_initial(rg_initial == 0);
+      let x <- init_rbb_jtag(0);
+      if(x != 32'hffffffff)begin
+        rg_initial <= 1'b1;
+        rg_client_fd <= x;
+      end
+    endrule
+    rule rl_get_frame((rg_initial == 1'b1));
+      let x <- get_frame(rg_client_fd);
+      delayed_actor <= truncate(x);
+      delayed_actor2 <= delayed_actor;
+      delayed_actor3 <= delayed_actor2;
+      delayed_actor4 <= delayed_actor3;
+      delayed_actor5 <= delayed_actor4;
+      tck_clk.setClockValue(delayed_actor2[2]);
+      if(delayed_actor2[4] == 1)
+        trst.assertReset();
+      if(delayed_actor5[3] == 1 )
+        send_tdo(wr_tdo,rg_client_fd);
+      wr_tdi <= delayed_actor[0];
+      wr_tms <= delayed_actor[1];
+      if( x[5] == 1)begin
+        $display("OpenOcd Exit");
+        $finish();
+      end
+    endrule
+  `endif
+  endmodule
+endpackage: TbSoc

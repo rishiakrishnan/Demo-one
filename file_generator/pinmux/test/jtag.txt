@@ -1,0 +1,5 @@
+tdi	in
+tms	in
+tclk	in
+trst	in
+tdo	out
